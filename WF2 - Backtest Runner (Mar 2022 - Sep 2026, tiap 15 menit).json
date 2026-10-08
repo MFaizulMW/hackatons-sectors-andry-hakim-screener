@@ -1,0 +1,103 @@
+{
+  "name": "WF2 - Backtest Runner (Mar 2022 - Sep 2026, tiap 15 menit)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "b79231fc-5b1c-400c-85bd-f84d09090e71",
+      "name": "Jadwal tiap 15 menit",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { as_of_date: '2022-09-27', mode: 'backtest' } }];"
+      },
+      "id": "546f7dd8-14b7-43d2-843f-697f9f0628d9",
+      "name": "Tanggal berikutnya",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "Z3u5VPVwiwln10yl",
+          "mode": "id",
+          "cachedResultUrl": "/workflow/Z3u5VPVwiwln10yl"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "3614ddba-44e1-4a65-a9d3-cb3b6a675d13",
+      "name": "Jalankan WF1 (mode backtest)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        480,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Tanggal berikutnya": {
+      "main": [
+        [
+          {
+            "node": "Jalankan WF1 (mode backtest)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jadwal tiap 15 menit": {
+      "main": [
+        [
+          {
+            "node": "Tanggal berikutnya",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "9a72acae-6408-45c4-9057-92e62c6e5a4d",
+  "meta": {
+    "instanceId": "f77324581907553341dfe7ef29cbc201a1fdca115d3456533a61ca342dd613c8"
+  },
+  "nodeGroups": [],
+  "id": "Shf3yfOJMiS6Ugyx",
+  "tags": []
+}

@@ -1,0 +1,1363 @@
+{
+  "name": "WF1 v4 - Andry Hakim Transformation Screener",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 7 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "59595102-f9f8-47b8-80cc-85c97073c9f7",
+      "name": "Jadwal 07.30 WIB (Sen-Jum)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -6528,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ================= KONFIGURASI — UBAH DI SINI =================\n// Kerangka Andry Hakim (riset publik): cari saham KECIL yang sedang BERTRANSFORMASI\n// lewat aksi korporasi (pengendali baru / backdoor, right issue awal, inbreng aset),\n// dipegang PENGENDALI yang kuat dan berkomitmen, belum telanjur naik (anti-FOMO).\nconst OWNER_WHITELIST = [\n  'Prajogo Pangestu',\n  'Barito Pacific',\n  // Kendaraan Agung Sedayu Group & Salim Group (dari data Sectors, ownership PANI)\n  'Multi Artha Pratama',\n];\nconst WHITELIST_SEBAGAI_SARINGAN = false; // true = right issue di luar whitelist dibuang (hemat kredit)\n\n// Peristiwa (katalis)\nconst MAX_RI_KE = 2;              // right issue ke-1/ke-2 = katalis\nconst PENGENDALI_PCT = 50;        // pihak baru melewati 50% = pengambilalihan\nconst AKUISISI_MIN_PCT = 20;      // atau pihak baru naik >= 20 poin sekaligus\nconst PIHAK_BARU_MAX_PCT = 5;     // \"pihak baru\" = kepemilikan sebelumnya < 5%\n\n// Gerbang pasar (data harga point-in-time)\nconst MAX_MCAP_PRA = 10e12;       // kapitalisasi sebelum peristiwa > Rp10 T = terlalu besar untuk multibagger\nconst MIN_LIKUIDITAS = 50e6;      // median nilai transaksi 20 hari < Rp50 juta = tidak bisa dibeli\n\n// Pemeriksaan\nconst GROWTH_MIN = 0.2;           // pendapatan tahunan naik >= 20%\nconst MAX_OWNER_JUAL_PCT = 1;     // pemegang besar jual >= 1% dalam 12 bulan = gugur\nconst MIN_HOLDER_PCT = 5;         // pemegang besar = kepemilikan >= 5%\nconst DILUSI_EKSTREM = 10;        // saham baru >= 10x saham lama\nconst TOLAK_JENIS = ['restrukturisasi_internal', 'konsolidasi_atau_tender_offer', 'penyelamatan_keuangan'];\n\nconst MAX_KANDIDAT = 10;          // batas kandidat per run (hemat kredit)\nconst SKOR_MINIMUM = 60;\n// ===============================================================\n\nconst tz = 'Asia/Jakarta';\nconst input = $input.first()?.json ?? {};\nconst today = DateTime.now().setZone(tz).startOf('day');\nconst asOf = input.as_of_date\n  ? DateTime.fromISO(String(input.as_of_date), { zone: tz }).startOf('day')\n  : today;\nconst mode = input.mode === 'backtest' ? 'backtest' : 'live';\nconst minD = (a, b) => (a < b ? a : b);\nconst ujung = minD(asOf, today);\n\n// Kalender RI. Live: -30/+30 hari. Backtest: 60 hari sampai as_of (anti look-ahead).\nconst calStart = mode === 'live' ? asOf.minus({ days: 30 }) : asOf.minus({ days: 59 });\nconst calEnd = mode === 'live' ? asOf.plus({ days: 30 }) : asOf;\n// Filings pasar (deteksi pengambilalihan). Live: 7 hari. Backtest: 60 hari.\nconst cocStart = mode === 'live' ? ujung.minus({ days: 7 }) : ujung.minus({ days: 59 });\n// Filings per emiten (perilaku owner 12 bulan)\nconst filStart = ujung.minus({ days: 365 });\n// Harga 90 hari sampai as_of (ukuran, likuiditas, harga tebus vs pasar, anti-FOMO)\nconst priceStart = ujung.minus({ days: 89 });\n// Berita 120 hari sampai as_of (narasi transformasi)\nconst newsStart = ujung.minus({ days: 120 });\n// Kinerja 90 hari SETELAH sinyal (hanya backtest, untuk evaluasi; tidak memengaruhi skor)\nconst perfStart = asOf.plus({ days: 1 });\nconst perfEnd = minD(asOf.plus({ days: 90 }), today);\n// Tahun laporan tahunan yang sudah terbit per as_of (laporan audit keluar ~April)\nconst finYear = asOf.month >= 5 ? asOf.year - 1 : asOf.year - 2;\n\nconst clean = (s) => String(s).replace(/'/g, '');\nconst ownerWhere = OWNER_WHITELIST.length\n  ? OWNER_WHITELIST.map((n) => `major_shareholders_name like '%${clean(n)}%'`).join(' or ')\n  : \"symbol = 'ZZZZ'\";\n\nreturn [{\n  json: {\n    mode,\n    as_of_date: asOf.toISODate(),\n    calStart: calStart.toISODate(), calEnd: calEnd.toISODate(),\n    cocStart: cocStart.toISODate(), cocEnd: ujung.toISODate(),\n    filStart: filStart.toISODate(), filEnd: ujung.toISODate(),\n    priceStart: priceStart.toISODate(), priceEnd: ujung.toISODate(),\n    newsStart: newsStart.toISODate(), newsEnd: ujung.toISODate(),\n    perfStart: perfStart.toISODate(), perfEnd: perfEnd.toISODate(),\n    perfAda: mode === 'backtest' && perfStart <= perfEnd,\n    finYear,\n    ownerWhere,\n    config: { OWNER_WHITELIST, WHITELIST_SEBAGAI_SARINGAN, MAX_RI_KE, PENGENDALI_PCT, AKUISISI_MIN_PCT,\n              PIHAK_BARU_MAX_PCT, MAX_MCAP_PRA, MIN_LIKUIDITAS, GROWTH_MIN, MAX_OWNER_JUAL_PCT,\n              MIN_HOLDER_PCT, DILUSI_EKSTREM, TOLAK_JENIS, MAX_KANDIDAT, SKOR_MINIMUM },\n    run_started_at: DateTime.now().setZone(tz).toISO(),\n  },\n}];"
+      },
+      "id": "7533453b-eda1-417c-b1fb-40f12ebac593",
+      "name": "Konfigurasi",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -6240,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sectors.app/v2/corporate-actions/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "right_issue"
+            },
+            {
+              "name": "start",
+              "value": "={{ $json.calStart }}"
+            },
+            {
+              "name": "end",
+              "value": "={{ $json.calEnd }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "afa6d49f-525c-4021-8ccd-fda69a7b7760",
+      "name": "Kalender Right Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -5984,
+        400
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.sectors.app/v2/companies/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ $('Konfigurasi').first().json.ownerWhere }}"
+            },
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7507d530-bf97-47e2-99e4-a66ab1c4cc2d",
+      "name": "Screener Owner Whitelist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -5728,
+        400
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.sectors.app/v2/filings/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start",
+              "value": "={{ $('Konfigurasi').first().json.cocStart }}"
+            },
+            {
+              "name": "end",
+              "value": "={{ $('Konfigurasi').first().json.cocEnd }}"
+            },
+            {
+              "name": "limit",
+              "value": "30"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "offset",
+                    "value": "={{ $response.body.pagination.next_offset }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.pagination || !$response.body.pagination.has_next }}",
+              "limitPagesFetched": true,
+              "maxRequests": 5,
+              "requestInterval": 300
+            }
+          }
+        }
+      },
+      "id": "a3d06e42-dc91-46d9-be04-57e439a2d553",
+      "name": "Filings Pasar (Pengambilalihan)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -5456,
+        400
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TAHAP 1 — PERISTIWA: right issue awal atau pengambilalihan oleh pihak baru\nconst cfg = $('Konfigurasi').first().json;\nconst C = cfg.config;\nconst cal = $('Kalender Right Issue').first().json || {};\nconst scr = $('Screener Owner Whitelist').first().json || {};\nconst norm = (s) => String(s || '').toUpperCase().replace('.JK', '');\nconst namaN = (x) => String(x || '').toLowerCase().replace(/\\b(pt|tbk)\\b|[.,]/g, '').replace(/\\s+/g, ' ').trim();\n\nconst ownerSet = new Set((scr.results || []).map((r) => norm(r.symbol)));\nconst kandidat = {};\n\n// 1a) Right issue (ex_date terbaru per emiten)\nconst riPerSym = {};\nfor (const ri of cal.right_issue || []) {\n  const s = norm(ri.symbol);\n  if (!riPerSym[s] || String(ri.ex_date) > String(riPerSym[s].ex_date)) riPerSym[s] = ri;\n}\nfor (const [s, ri] of Object.entries(riPerSym)) {\n  if (C.WHITELIST_SEBAGAI_SARINGAN && C.OWNER_WHITELIST.length && !ownerSet.has(s)) continue;\n  kandidat[s] = { symbol: s, ri };\n}\n\n// 1b) Pengambilalihan oleh PIHAK BARU (semua halaman filings, semua jenis transaksi)\nconst pages = $('Filings Pasar (Pengambilalihan)').all().map((i) => i.json || {});\nconst rows = pages.flatMap((p) => p.results || []);\nlet akuisisi = 0, abaikan = 0;\nfor (const f of rows) {\n  const b = Number(f.share_percentage_before ?? 0);\n  const a = Number(f.share_percentage_after ?? 0);\n  const melewati = b < C.PENGENDALI_PCT && a >= C.PENGENDALI_PCT;\n  const lompatan = a - b >= C.AKUISISI_MIN_PCT;\n  if (!melewati && !lompatan) continue;\n  // Pihak lama yang menambah (konsolidasi, tender offer induk) BUKAN transformasi\n  if (b >= C.PIHAK_BARU_MAX_PCT) { abaikan++; continue; }\n  // Emiten ini sendiri yang membeli perusahaan lain\n  const target = String(f.title || '').split(/shares of/i)[1];\n  if (target && namaN(target).includes(namaN(f.holder_name))) { abaikan++; continue; }\n  akuisisi++;\n  const s = norm(f.symbol);\n  kandidat[s] = kandidat[s] || { symbol: s };\n  const tgl = String(f.timestamp || '').slice(0, 10);\n  if (!kandidat[s].coc || tgl > kandidat[s].coc.tanggal) {\n    kandidat[s].coc = { jenis: melewati ? 'pengendali baru' : 'pemegang strategis baru', pembeli: f.holder_name,\n      sebelum: b, sesudah: a, tanggal: tgl, harga: f.price ?? null, grup: f.idx_conglomerates_group_slug || [] };\n  }\n}\n\nlet list = Object.values(kandidat);\nlist.sort((x, y) => ((y.coc ? 1 : 0) - (x.coc ? 1 : 0))\n  || String(y.ri?.ex_date || y.coc?.tanggal || '').localeCompare(String(x.ri?.ex_date || x.coc?.tanggal || '')));\nconst terpotong = list.length > C.MAX_KANDIDAT;\nlist = list.slice(0, C.MAX_KANDIDAT);\n\nconst stats = {\n  ri_dalam_jendela: Object.keys(riPerSym).length,\n  akuisisi_terdeteksi: akuisisi,\n  akuisisi_diabaikan: abaikan,\n  kandidat: list.length,\n  terpotong,\n  filings_dibaca: rows.length,\n  filings_total_tersedia: pages[0]?.pagination?.total_count ?? null,\n  kalender_error: !!cal.error,\n};\nif (!list.length) return [{ json: { _empty: true, tahap: 'peristiwa', stats } }];\nreturn list.map((k) => ({\n  json: { ...(k.ri || {}), symbol: k.symbol, is_ri: !!k.ri, is_coc: !!k.coc, coc: k.coc || null,\n          owner_whitelist: ownerSet.has(k.symbol), stats },\n}));"
+      },
+      "id": "7188dcf7-aa02-4dcf-89ed-546e2c6d1525",
+      "name": "Gabung kandidat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c8",
+              "leftValue": "={{ $json._empty !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b65254e8-dec8-4f71-a013-65a8ee26fd04",
+      "name": "Ada kandidat?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -4944,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.sectors.app/v2/daily/{{ $json.symbol }}/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start",
+              "value": "={{ $('Konfigurasi').first().json.priceStart }}"
+            },
+            {
+              "name": "end",
+              "value": "={{ $('Konfigurasi').first().json.priceEnd }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "raw"
+            }
+          }
+        }
+      },
+      "id": "ed9c6f51-057a-43d4-8ce7-de5a0c42baff",
+      "name": "Harga 90 Hari",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4688,
+        304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TAHAP 2 — GERBANG PASAR (point-in-time, dari harga 90 hari sampai as_of)\nconst cfg = $('Konfigurasi').first().json;\nconst C = cfg.config;\nconst kand = $('Gabung kandidat').all();\nconst parse = (j) => {\n  if (!j || j.error) return null;\n  let raw = j.raw ?? j.data ?? j;\n  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { return null; } }\n  if (Array.isArray(raw)) return raw;\n  if (raw && Array.isArray(raw.results)) return raw.results;\n  return null;\n};\nconst median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };\n\nconst lolos = [], ditolak = [];\n$input.all().forEach((it, i) => {\n  const k = kand[i].json;\n  const data = parse(it.json);\n  const rows = (data || []).filter((r) => r && r.date && r.close > 0 && r.date <= cfg.priceEnd)\n    .sort((a, b) => String(a.date).localeCompare(String(b.date)));\n  const ada = rows.length > 0;\n  const last = ada ? rows[rows.length - 1] : null;\n  const tglPeristiwa = k.is_coc && (!k.is_ri || k.coc.tanggal < k.ex_date) ? k.coc.tanggal : (k.ex_date || k.coc?.tanggal);\n  let pra = null;\n  for (const r of rows) if (r.date < tglPeristiwa) pra = r;\n  if (!pra) pra = last;\n  const mcapPra = pra?.market_cap ?? null;\n  const minClose = ada ? Math.min(...rows.map((r) => r.close)) : null;\n  const kenaikan = ada && minClose ? last.close / minClose : null;\n  const likuiditas = median(rows.slice(-20).map((r) => r.close * (r.volume || 0)));\n  const diskon = k.is_ri && k.price && pra?.close ? k.price / pra.close - 1 : null;\n  const dilusi = k.is_ri && k.old_ratio && k.new_ratio ? k.new_ratio / k.old_ratio : null;\n  const hargaAkuisisiVsPasar = k.is_coc && k.coc.harga && pra?.close ? k.coc.harga / pra.close - 1 : null;\n\n  const pasar = {\n    data_harga_ada: ada, harga_asof: last?.close ?? null, tanggal_harga: last?.date ?? null,\n    mcap_pra: mcapPra, likuiditas_median: likuiditas, kenaikan_90h: kenaikan ? +kenaikan.toFixed(2) : null,\n    diskon_tebus: diskon != null ? +diskon.toFixed(3) : null, dilusi: dilusi != null ? +dilusi.toFixed(2) : null,\n    harga_akuisisi_vs_pasar: hargaAkuisisiVsPasar != null ? +hargaAkuisisiVsPasar.toFixed(3) : null,\n  };\n  const alasan = [];\n  if (ada && mcapPra != null && mcapPra > C.MAX_MCAP_PRA) alasan.push(`kapitalisasi Rp${(mcapPra / 1e12).toFixed(1)} T terlalu besar`);\n  if (ada && likuiditas != null && likuiditas < C.MIN_LIKUIDITAS) alasan.push(`tidak likuid (Rp${Math.round(likuiditas / 1e6)} juta/hari)`);\n  if (alasan.length) ditolak.push({ symbol: k.symbol, alasan: alasan.join(', ') });\n  else lolos.push({ ...k, pasar });\n});\n\nif (!lolos.length) return [{ json: { _empty: true, tahap: 'gerbang pasar', ditolak, stats: kand[0]?.json?.stats } }];\nreturn lolos.map((k) => ({ json: { ...k, ditolak_gerbang: ditolak } }));"
+      },
+      "id": "7d9ac684-6fd4-4d9c-889a-9a086b18e3cd",
+      "name": "Gerbang Pasar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4416,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c11",
+              "leftValue": "={{ $json._empty !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f9148605-1e62-47b5-b8c8-3cbb64b6765b",
+      "name": "Lolos gerbang?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -4160,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Konfigurasi').first().json;\nconst C = cfg.config;\nconst syms = $input.all().map((i) => i.json.symbol);\nconst list = '[' + syms.flatMap((s) => [`'${s}'`, `'${s}.JK'`]).join(', ') + ']';\nconst Y = cfg.finYear;\nreturn [{\n  json: {\n    whereTumbuh: `symbol in ${list} and revenue[${Y}] > revenue[${Y - 1}] * ${1 + C.GROWTH_MIN}`,\n    whereTurnaround: `symbol in ${list} and earnings[${Y}] > 0 and earnings[${Y - 1}] < 0`,\n    whereEkuitasNegatif: `symbol in ${list} and total_equity[${Y}] < 0`,\n  },\n}];"
+      },
+      "id": "e1bbc3f2-86c0-4a3c-bc87-df8b257196e9",
+      "name": "Siapkan query fundamental",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3904,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sectors.app/v2/companies/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ $('Siapkan query fundamental').first().json.whereTumbuh }}"
+            },
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8a61e446-2ed9-476b-9178-bbcb50332a98",
+      "name": "Screener Pendapatan Tumbuh",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3648,
+        208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.sectors.app/v2/companies/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ $('Siapkan query fundamental').first().json.whereTurnaround }}"
+            },
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8e11c125-720f-4641-801c-432cc2acbff2",
+      "name": "Screener Turnaround Laba",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3376,
+        208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.sectors.app/v2/companies/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ $('Siapkan query fundamental').first().json.whereEkuitasNegatif }}"
+            },
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "51905e00-31f0-45af-a382-493cfb7cc5aa",
+      "name": "Screener Ekuitas Negatif",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3120,
+        208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const norm = (s) => String(s || '').toUpperCase().replace('.JK', '');\nconst ambil = (n) => { const r = $(n).first().json || {}; return { ok: !r.error, s: new Set((r.results || []).map((x) => norm(x.symbol))) }; };\nconst tumbuh = ambil('Screener Pendapatan Tumbuh');\nconst turn = ambil('Screener Turnaround Laba');\nconst neg = ambil('Screener Ekuitas Negatif');\nconst cfg = $('Konfigurasi').first().json;\nreturn $('Gerbang Pasar').all().map((it) => {\n  const s = it.json.symbol;\n  return { json: { ...it.json, tumbuh: tumbuh.s.has(s), turnaround: turn.s.has(s), ekuitas_negatif: neg.s.has(s),\n                   fundamental_tahun: cfg.finYear, fundamental_dicek: tumbuh.ok && turn.ok } };\n});"
+      },
+      "id": "71d994b0-5a57-47f9-97ec-0e6a9f396c26",
+      "name": "Kembalikan kandidat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2864,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.sectors.app/v2/company/corporate-actions/{{ $json.symbol }}/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "19ca80e9-e1ff-432e-b7eb-62d1f57aca48",
+      "name": "Riwayat Corporate Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2608,
+        208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Right issue ke-berapa (anti look-ahead: hanya RI dengan ex_date <= peristiwa)\nconst cfg = $('Konfigurasi').first().json;\nconst kand = $('Kembalikan kandidat').all();\nreturn $input.all().map((it, i) => {\n  const k = kand[i].json;\n  const ris = it.json?.corporate_actions?.right_issue || [];\n  const batas = k.is_ri ? String(k.ex_date) : cfg.as_of_date;\n  const jumlah = ris.filter((r) => r.ex_date && String(r.ex_date) <= batas).length;\n  return { json: { ...k, ri_ke: k.is_ri ? Math.max(jumlah, 1) : null, ri_sebelumnya: k.is_ri ? Math.max(jumlah - 1, 0) : jumlah,\n                   riwayat_ri: ris.map((r) => r.ex_date).filter(Boolean).filter((d) => d <= cfg.as_of_date).sort(),\n                   data_ri_ok: !it.json?.error } };\n});"
+      },
+      "id": "a7bc0120-de55-4c1a-a917-3a65b1b3cf11",
+      "name": "Hitung RI ke-berapa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2336,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sectors.app/v2/filings/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "={{ $json.symbol }}"
+            },
+            {
+              "name": "start",
+              "value": "={{ $('Konfigurasi').first().json.filStart }}"
+            },
+            {
+              "name": "end",
+              "value": "={{ $('Konfigurasi').first().json.filEnd }}"
+            },
+            {
+              "name": "limit",
+              "value": "30"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "60c8b49c-ee57-4c80-a38a-a92fe605401a",
+      "name": "Filings 12 Bulan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2080,
+        208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Perilaku pemegang saham 12 bulan sampai as_of\nconst cfg = $('Konfigurasi').first().json;\nconst C = cfg.config;\nconst prev = $('Hitung RI ke-berapa').all();\nconst low = (x) => String(x || '').toLowerCase();\nreturn $input.all().map((it, i) => {\n  const k = prev[i].json;\n  const rows = it.json?.results || [];\n  const jual = rows.filter((r) => r.transaction_type === 'sell');\n  let besar = jual.filter((r) => (r.share_percentage_before ?? 0) >= C.MIN_HOLDER_PCT);\n  // Pemilik lama yang keluar saat pengambilalihan = bagian dari katalis, bukan buang barang\n  let keluarLama = [];\n  if (k.is_coc) {\n    keluarLama = besar.filter((r) => (r.share_percentage_after ?? 0) < C.MIN_HOLDER_PCT && low(r.holder_name) !== low(k.coc.pembeli));\n    besar = besar.filter((r) => !keluarLama.includes(r));\n  }\n  const jualPct = besar.reduce((s, r) => s + Math.abs(r.share_percentage_transaction ?? 0), 0);\n  const menambah = rows.filter((r) => r.transaction_type !== 'sell'\n    && (r.share_percentage_after ?? 0) >= C.MIN_HOLDER_PCT\n    && (r.share_percentage_after ?? 0) > (r.share_percentage_before ?? 0));\n  const grup = [...new Set([...(k.coc?.grup || []), ...rows.flatMap((r) => r.idx_conglomerates_group_slug || [])].filter(Boolean))];\n  return { json: { ...k,\n    owner: { filings_terbaca: rows.length, jual_pct: +jualPct.toFixed(2),\n             penjual_besar: [...new Set(besar.map((r) => r.holder_name).filter(Boolean))],\n             pemilik_lama_keluar: [...new Set(keluarLama.map((r) => r.holder_name).filter(Boolean))],\n             pemegang_menambah: [...new Set(menambah.map((r) => r.holder_name).filter(Boolean))],\n             grup_konglomerasi: grup } } };\n});"
+      },
+      "id": "5b512d73-487f-44ac-9816-c9a04f765439",
+      "name": "Analisis Owner",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1824,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sectors.app/v2/news/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbols",
+              "value": "={{ $json.symbol }}"
+            },
+            {
+              "name": "start",
+              "value": "={{ $('Konfigurasi').first().json.newsStart }}"
+            },
+            {
+              "name": "end",
+              "value": "={{ $('Konfigurasi').first().json.newsEnd }}"
+            },
+            {
+              "name": "limit",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e607791f-bd52-4cc0-8767-da83d2756bd0",
+      "name": "Berita 120 Hari",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1568,
+        208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ringkas berita per kandidat untuk dibaca AI\nconst prev = $('Analisis Owner').all();\nconst fmt = (v) => (v == null ? '-' : v);\nreturn $input.all().map((it, i) => {\n  const k = prev[i].json;\n  const res = (it.json?.results || []).slice(0, 8);\n  const berita = res.map((n) => `- [${String(n.timestamp || '').slice(0, 10)}] ${n.title || ''}: ${String(n.body || '').replace(/\\s+/g, ' ').slice(0, 350)}`).join('\\n');\n  const fakta = [\n    k.is_ri ? `Right issue ke-${k.ri_ke}, ex-date ${k.ex_date}, harga tebus Rp${fmt(k.price)}, rasio lama:baru ${fmt(k.old_ratio)}:${fmt(k.new_ratio)}, dilusi ${fmt(k.pasar.dilusi)}x, harga tebus vs pasar ${k.pasar.diskon_tebus == null ? '-' : Math.round(k.pasar.diskon_tebus * 100) + '%'}` : null,\n    k.is_coc ? `${k.coc.jenis}: ${k.coc.pembeli} ${k.coc.sebelum}% -> ${k.coc.sesudah}% (${k.coc.tanggal})` : null,\n    `Kapitalisasi sebelum peristiwa: ${k.pasar.mcap_pra ? 'Rp' + (k.pasar.mcap_pra / 1e9).toFixed(0) + ' miliar' : 'tidak ada data'}`,\n  ].filter(Boolean).join('\\n');\n  return { json: { ...k, jumlah_berita: res.length, berita_ringkas: berita || '(tidak ada berita di periode ini)', fakta_peristiwa: fakta } };\n});"
+      },
+      "id": "7e480465-4e21-491f-9b61-2c097c3079cb",
+      "name": "Siapkan Berita",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1296,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Kamu analis pasar modal Indonesia. Tugasmu MENGKLASIFIKASI peristiwa korporasi berikut HANYA berdasarkan fakta dan berita di bawah. Jangan memakai pengetahuan di luar teks ini.\n\nEmiten: {{ $json.symbol }}\nTanggal analisis: {{ $json.as_of_date || $('Konfigurasi').first().json.as_of_date }}\n\nFakta peristiwa:\n{{ $json.fakta_peristiwa }}\n\nBerita (sampai tanggal analisis):\n{{ $json.berita_ringkas }}\n\nBalas HANYA dengan satu objek JSON valid, tanpa teks lain, dengan kunci:\n{\"jenis\": salah satu dari \"pengendali_baru_transformasi\" | \"ekspansi_atau_akuisisi_aset\" | \"restrukturisasi_internal\" | \"konsolidasi_atau_tender_offer\" | \"penyelamatan_keuangan\" | \"lainnya\" | \"tidak_ada_info\",\n \"tujuan_dana\": string singkat atau null,\n \"pengendali\": nama pengendali atau pembeli siaga atau null,\n \"pengendali_kuat\": true hanya jika berita JELAS menyebut pengendali/pembeli siaga adalah grup besar, konglomerat, institusi, atau punya rekam jejak bisnis kuat; selain itu false,\n \"red_flags\": array string singkat (misal: bayar utang, konversi utang, ekuitas negatif, pemegang saham menjual, rumor tanpa keterbukaan),\n \"ringkasan\": satu kalimat}\n\nPanduan jenis:\n- pengendali_baru_transformasi: pihak baru mengambil alih dan berencana memasukkan aset/bisnis baru (pola backdoor listing).\n- ekspansi_atau_akuisisi_aset: dana dipakai membeli aset/perusahaan atau ekspansi kapasitas yang mengubah skala bisnis.\n- restrukturisasi_internal: pengalihan saham antar entitas satu grup/keluarga, kendali tetap sama.\n- konsolidasi_atau_tender_offer: pengendali lama menambah kepemilikan, tender offer wajib/sukarela, rencana go private.\n- penyelamatan_keuangan: dana untuk bayar/konversi utang, menutup defisit, atau menyelamatkan perusahaan yang merugi berat.\n- tidak_ada_info: berita tidak cukup untuk menilai."
+      },
+      "id": "d8ce5df0-8b66-44d9-9c04-f4a808b01315",
+      "name": "Klasifikasi Narasi (AI)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        -1040,
+        208
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-4-5-20251001"
+        },
+        "options": {
+          "maxTokensToSample": 2000
+        }
+      },
+      "id": "39a45ac9-b2ed-49a2-b961-63c2dd802176",
+      "name": "Claude Haiku",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        -1024,
+        -112
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "cnPai7Z82G78s0e8",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TAHAP 5 — SKOR (100) + GERBANG NARASI. Semua angka point-in-time per as_of.\nconst cfg = $('Konfigurasi').first().json;\nconst C = cfg.config;\nconst prev = $('Siapkan Berita').all();\nconst parseAI = (t) => {\n  const m = String(t || '').match(/\\{[\\s\\S]*\\}/);\n  if (!m) return null;\n  try { return JSON.parse(m[0]); } catch (e) { return null; }\n};\nconst hasil = $input.all().map((it, i) => {\n  const k = prev[i].json;\n  const ai = parseAI(it.json?.text) || { jenis: 'tidak_ada_info', pengendali_kuat: false, red_flags: [], ringkasan: '(klasifikasi AI gagal)' };\n  const p = k.pasar, o = k.owner;\n  const pemilikKuat = k.owner_whitelist || o.grup_konglomerasi.length > 0 || ai.pengendali_kuat === true;\n  const tolak = [], alasan = [];\n\n  // ---- Gerbang (gugur) ----\n  if (o.jual_pct >= C.MAX_OWNER_JUAL_PCT) tolak.push(`pemegang besar jual ${o.jual_pct}% dalam 12 bulan`);\n  if (k.ekuitas_negatif && !k.is_coc) tolak.push('ekuitas negatif tanpa pengendali baru');\n  if (C.TOLAK_JENIS.includes(ai.jenis)) tolak.push(`narasi: ${ai.jenis.replace(/_/g, ' ')}`);\n  if (p.dilusi != null && p.dilusi >= C.DILUSI_EKSTREM && !pemilikKuat && !k.is_coc) tolak.push(`dilusi ekstrem ${p.dilusi}x tanpa pengendali kuat`);\n\n  // ---- 1) Katalis (30) ----\n  let katalis = 0;\n  if (k.is_coc) { katalis = 30; alasan.push(`Katalis: ${k.coc.jenis} ${k.coc.pembeli} ${k.coc.sebelum}%→${k.coc.sesudah}% (+30)`); }\n  if (k.is_ri) {\n    const v = k.ri_ke === 1 ? 30 : k.ri_ke === 2 ? 20 : 0;\n    if (v === 0) alasan.push(`Right issue ke-${k.ri_ke}, biasanya tidak signifikan (0)`);\n    else if (v > katalis) { katalis = v; alasan.push(`Katalis: right issue ke-${k.ri_ke} (+${v})`); }\n    else alasan.push(`Right issue ke-${k.ri_ke} (sudah tercakup)`);\n  }\n  if (katalis === 0) tolak.push('tidak ada katalis yang memenuhi syarat');\n\n  // ---- 2) Komitmen pengendali (25) ----\n  let komit = 0;\n  const d = k.is_ri ? p.diskon_tebus : p.harga_akuisisi_vs_pasar;\n  if (d == null) { komit += 5; alasan.push('Harga tebus/akuisisi vs pasar tidak bisa dihitung (+5 netral)'); }\n  else if (d >= -0.10) { komit += 10; alasan.push(`Harga ${k.is_ri ? 'tebus' : 'akuisisi'} ${Math.round(d * 100)}% vs pasar: pengendali berani bayar wajar (+10)`); }\n  else if (d >= -0.35) { komit += 6; alasan.push(`Diskon ${Math.round(d * 100)}% (+6)`); }\n  else if (d >= -0.60) { komit += 3; alasan.push(`Diskon dalam ${Math.round(d * 100)}% (+3)`); }\n  else alasan.push(`Diskon sangat dalam ${Math.round(d * 100)}% (0)`);\n  if (o.filings_terbaca === 0) { komit += 5; alasan.push('Tidak ada data transaksi pemegang saham 12 bln (+5 netral)'); }\n  else if (o.jual_pct === 0) { komit += 10; alasan.push('Pemegang besar tidak jual 12 bln (+10)'); }\n  else if (o.jual_pct < C.MAX_OWNER_JUAL_PCT) { komit += 5; alasan.push(`Pemegang besar jual ${o.jual_pct}% (+5)`); }\n  if (o.pemegang_menambah.length) { komit += 5; alasan.push(`Pemegang besar menambah: ${o.pemegang_menambah.slice(0, 2).join(', ')} (+5)`); }\n  if (o.pemilik_lama_keluar.length) alasan.push(`Pemilik lama keluar saat pengambilalihan: ${o.pemilik_lama_keluar.join(', ')} (bukan buang barang)`);\n\n  // ---- 3) Kualitas pemilik (15) ----\n  let pemilik = 0;\n  if (k.owner_whitelist) { pemilik = 15; alasan.push('Owner di whitelist (+15)'); }\n  else if (o.grup_konglomerasi.length) { pemilik = 15; alasan.push(`Grup konglomerasi ${o.grup_konglomerasi.join(', ')} (+15)`); }\n  else if (ai.pengendali_kuat === true) { pemilik = 8; alasan.push(`Berita: pengendali kuat (${ai.pengendali || '-'}) (+8)`); }\n\n  // ---- 4) Ruang tumbuh (15) ----\n  let ruang = 0;\n  if (p.mcap_pra == null) alasan.push('Kapitalisasi tidak diketahui (0)');\n  else {\n    const t = p.mcap_pra / 1e12;\n    ruang = t <= 0.5 ? 15 : t <= 2 ? 10 : t <= 5 ? 5 : 0;\n    alasan.push(`Kapitalisasi sebelum peristiwa Rp${t.toFixed(2)} T (+${ruang})`);\n  }\n\n  // ---- 5) Arah fundamental (10) ----\n  let fund = 0;\n  if (k.tumbuh) { fund = 10; alasan.push(`Pendapatan ${k.fundamental_tahun} naik >= ${C.GROWTH_MIN * 100}% (+10)`); }\n  else if (k.turnaround) { fund = 10; alasan.push(`Laba ${k.fundamental_tahun} berbalik dari rugi (+10)`); }\n\n  // ---- 6) Timing / anti-FOMO (5) ----\n  let timing = 0;\n  if (p.kenaikan_90h == null) alasan.push('Data harga 90 hari tidak ada (0)');\n  else if (p.kenaikan_90h <= 2) { timing = 5; alasan.push(`Harga ${p.kenaikan_90h}x dari titik terendah 90 hari (+5)`); }\n  else if (p.kenaikan_90h <= 3) { timing = 2; alasan.push(`Harga ${p.kenaikan_90h}x dari titik terendah 90 hari (+2)`); }\n  else alasan.push(`Harga sudah ${p.kenaikan_90h}x dari titik terendah 90 hari, rawan FOMO (0)`);\n\n  const skor = katalis + komit + pemilik + ruang + fund + timing;\n  if (skor < C.SKOR_MINIMUM) tolak.push(`skor ${skor} < ${C.SKOR_MINIMUM}`);\n  return { ...k, ai, skor, skor_rinci: { katalis, komitmen: komit, pemilik, ruang_tumbuh: ruang, fundamental: fund, timing },\n           alasan, tolak, lolos: tolak.length === 0, mode: cfg.mode, as_of_date: cfg.as_of_date };\n});\nconst lolos = hasil.filter((h) => h.lolos);\nif (!lolos.length) {\n  return [{ json: { _empty: true, tahap: 'skor', stats: hasil[0]?.stats, ditolak_gerbang: hasil[0]?.ditolak_gerbang || [],\n    dicek: hasil.map((h) => ({ symbol: h.symbol, skor: h.skor, tolak: h.tolak, jenis: h.ai.jenis })) } }];\n}\nreturn lolos.map((h) => ({ json: { ...h, dicek_lain: hasil.filter((x) => !x.lolos).map((x) => ({ symbol: x.symbol, skor: x.skor, tolak: x.tolak })) } }));"
+      },
+      "id": "f53eaf43-34a2-4020-b064-d9d6e6055df1",
+      "name": "Skor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -784,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c26",
+              "leftValue": "={{ $json._empty !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "037c9765-a93c-4d9d-bcbd-eee6b044c87f",
+      "name": "Ada yang lolos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -528,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c27",
+              "leftValue": "={{ $('Konfigurasi').first().json.perfAda === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f7f58ca9-1ac5-4f59-9c2e-cc734b46830e",
+      "name": "Mode backtest?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -256,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.sectors.app/v2/daily/{{ $json.symbol }}/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start",
+              "value": "={{ $('Konfigurasi').first().json.perfStart }}"
+            },
+            {
+              "name": "end",
+              "value": "={{ $('Konfigurasi').first().json.perfEnd }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "raw"
+            }
+          }
+        }
+      },
+      "id": "fcd9e040-630b-45f9-9053-5020c1f27120",
+      "name": "Kinerja 90 Hari Setelah Sinyal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "IxKO7MN03ofv7vZe",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Evaluasi backtest: kinerja 90 hari SETELAH sinyal (tidak memengaruhi skor)\nconst prev = $('Skor').all();\nconst parse = (j) => {\n  if (!j || j.error) return null;\n  let raw = j.raw ?? j.data ?? j;\n  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { return null; } }\n  return Array.isArray(raw) ? raw : (raw?.results || null);\n};\nreturn $input.all().map((it, i) => {\n  const k = prev[i].json;\n  const rows = (parse(it.json) || []).filter((r) => r && r.close > 0).sort((a, b) => String(a.date).localeCompare(String(b.date)));\n  const entry = k.pasar?.harga_asof;\n  let kinerja = null;\n  if (rows.length && entry) {\n    const last = rows[rows.length - 1];\n    const maks = Math.max(...rows.map((r) => r.close));\n    kinerja = { sampai: last.date, hari: rows.length, return_pct: Math.round((last.close / entry - 1) * 100), puncak_pct: Math.round((maks / entry - 1) * 100) };\n  }\n  return { json: { ...k, kinerja } };\n});"
+      },
+      "id": "e2f08323-ee62-4387-811f-dd9b9bed8343",
+      "name": "Gabung Kinerja",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Kamu analis saham IDX. Tulis catatan singkat untuk emiten yang lolos screener berbasis kerangka investor Andry Hakim: mencari saham kecil yang sedang BERTRANSFORMASI lewat aksi korporasi (pengendali baru/backdoor listing, right issue awal, inbreng atau ekspansi aset), dipegang pengendali yang kuat dan berkomitmen, dan belum telanjur naik (anti-FOMO).\n\nData (JSON):\n{{ JSON.stringify({ symbol: $json.symbol, mode: $json.mode, as_of_date: $json.as_of_date, right_issue: $json.is_ri ? { ri_ke: $json.ri_ke, ex_date: $json.ex_date, harga_tebus: $json.price, rasio_lama: $json.old_ratio, rasio_baru: $json.new_ratio } : null, pengambilalihan: $json.coc, pasar: $json.pasar, fundamental: { tahun: $json.fundamental_tahun, pendapatan_tumbuh: $json.tumbuh, laba_berbalik: $json.turnaround, ekuitas_negatif: $json.ekuitas_negatif }, pemegang_saham: $json.owner, narasi_berita: $json.ai, skor: $json.skor, skor_rinci: $json.skor_rinci, alasan: $json.alasan }) }}\n\nTulis maksimal 110 kata dalam Bahasa Indonesia, teks biasa tanpa markdown:\n1. Cerita transformasinya: katalis apa, siapa pengendalinya, dan kenapa bisa mengubah nilai perusahaan.\n2. Risiko utama (dilusi, harga tebus, ketergantungan pada pengendali, data yang belum mendukung).\n3. Satu hal yang perlu dipantau berikutnya.\nJangan beri target harga atau perintah beli/jual. Jangan mengarang data yang tidak ada di JSON. Jangan menyebut Andry Hakim merekomendasikan saham ini. Jika mode = backtest, tulis sebagai catatan historis per tanggal as_of_date."
+      },
+      "id": "27a7fda8-0ea2-4584-bcf1-b70f55f617b7",
+      "name": "Tulis Tesis (AI)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        528,
+        112
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-sonnet-5-5"
+        },
+        "options": {
+          "maxTokensToSample": 2000
+        }
+      },
+      "id": "499e115f-eafc-4f95-a480-03a92b07419d",
+      "name": "Claude Sonnet",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        528,
+        320
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "cnPai7Z82G78s0e8",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Konfigurasi').first().json;\nconst tz = 'Asia/Jakarta';\nconst now = DateTime.now().setZone(tz);\nconst ambil = (n) => { try { return $(n).all().map((i) => i.json); } catch (e) { return null; } };\nconst stats = ambil('Gabung kandidat')?.[0]?.stats || {};\nconst gerbang = ambil('Gerbang Pasar');\nconst skorAll = ambil('Skor');\nconst ditolakGerbang = gerbang?.[0]?.ditolak || gerbang?.[0]?.ditolak_gerbang || [];\nconst dicek = skorAll?.[0]?._empty ? (skorAll[0].dicek || []) : (skorAll?.[0]?.dicek_lain || []);\n\nlet sinyal = [];\nconst inp = $input.all().map((i) => i.json);\nif (inp.length && typeof inp[0].text === 'string') {\n  const menang = (ambil('Gabung Kinerja') || ambil('Skor') || []).filter((j) => j.lolos);\n  sinyal = menang.map((s, i) => ({ ...s, tesis: (inp[i]?.text || '').trim() || '(tesis AI gagal dibuat)' }));\n}\n\nconst kunci = (s) => `${s.symbol}|${s.ex_date || ''}|${s.coc?.tanggal || ''}`;\nlet baru = sinyal;\nif (cfg.mode === 'live') {\n  const st = $getWorkflowStaticData('global');\n  st.terkirim = st.terkirim || {};\n  baru = sinyal.filter((s) => !st.terkirim[kunci(s)]);\n  baru.forEach((s) => { st.terkirim[kunci(s)] = now.toISO(); });\n}\n\nconst label = cfg.mode === 'backtest'\n  ? `🧪 BACKTEST (as of ${cfg.as_of_date})`\n  : `📋 Andry Hakim Screener — ${now.toFormat('dd LLL yyyy HH:mm')} WIB`;\nconst T = (x) => (x == null ? '-' : 'Rp' + (x / 1e12).toFixed(2) + ' T');\nconst blok = (s) => {\n  const r = s.skor_rinci, p = s.pasar;\n  const kat = [];\n  if (s.is_ri) kat.push(`RI ke-${s.ri_ke} (ex ${s.ex_date}, tebus Rp${s.price ?? '-'}, rasio ${s.old_ratio ?? '?'}:${s.new_ratio ?? '?'})`);\n  if (s.is_coc) kat.push(`${s.coc.jenis}: ${s.coc.pembeli} ${s.coc.sebelum}%→${s.coc.sesudah}%`);\n  return [\n    `▶ ${s.symbol} — skor ${s.skor}/100`,\n    `  katalis ${r.katalis}/30 · komitmen ${r.komitmen}/25 · pemilik ${r.pemilik}/15 · ruang ${r.ruang_tumbuh}/15 · fundamental ${r.fundamental}/10 · timing ${r.timing}/5`,\n    `Katalis: ${kat.join(' + ')}`,\n    `Pasar: kapitalisasi pra-peristiwa ${T(p.mcap_pra)} | naik ${p.kenaikan_90h ?? '-'}x dari low 90h | harga tebus vs pasar ${p.diskon_tebus == null ? '-' : Math.round(p.diskon_tebus * 100) + '%'}`,\n    `Narasi berita: ${s.ai?.jenis || '-'}${s.ai?.ringkasan ? ' — ' + s.ai.ringkasan : ''}`,\n    s.kinerja ? `📈 90 hari kemudian: ${s.kinerja.return_pct >= 0 ? '+' : ''}${s.kinerja.return_pct}% (puncak +${s.kinerja.puncak_pct}%)` : null,\n    s.tesis, '',\n  ].filter((x) => x !== null).join('\\n');\n};\nconst ringkasTolak = [\n  ...ditolakGerbang.map((d) => `${d.symbol} (${d.alasan})`),\n  ...dicek.map((d) => `${d.symbol} (${(d.tolak || []).join('; ')})`),\n].slice(0, 8);\n\nlet pesan;\nif (baru.length) {\n  pesan = [label, `${baru.length} emiten lolos:`, '', ...baru.map(blok),\n    ringkasTolak.length ? `Gugur: ${ringkasTolak.join(' | ')}` : null,\n    '⚠️ Terinspirasi kerangka publik Andry Hakim, bukan rekomendasi beliau dan bukan saran investasi.'].filter((x) => x !== null).join('\\n');\n} else {\n  pesan = [label,\n    cfg.mode === 'live' ? '0 emiten lolos hari ini.' : '0 emiten lolos pada tanggal ini.',\n    `Right issue di jendela ${cfg.calStart} s/d ${cfg.calEnd}: ${stats.ri_dalam_jendela ?? 0}`,\n    `Pengambilalihan pihak baru: ${stats.akuisisi_terdeteksi ?? 0} (diabaikan karena pihak lama/akuisisi oleh emiten: ${stats.akuisisi_diabaikan ?? 0})`,\n    `Kandidat dicek: ${stats.kandidat ?? 0} | Filings dipindai: ${stats.filings_dibaca ?? 0}${stats.filings_total_tersedia != null ? ' dari ' + stats.filings_total_tersedia : ''}`,\n    ringkasTolak.length ? `Gugur: ${ringkasTolak.join(' | ')}` : null,\n    sinyal.length && !baru.length ? 'Sinyal yang lolos sudah pernah dikirim sebelumnya.' : null,\n    stats.kalender_error ? '⚠️ Gagal mengambil kalender corporate action.' : null,\n  ].filter(Boolean).join('\\n');\n}\nreturn [{ json: {\n  timestamp: now.toISO(), mode: cfg.mode, as_of_date: cfg.as_of_date,\n  ri_dalam_jendela: stats.ri_dalam_jendela ?? 0, akuisisi_terdeteksi: stats.akuisisi_terdeteksi ?? 0,\n  kandidat: stats.kandidat ?? 0, lolos: baru.length,\n  simbol_lolos: baru.map((s) => s.symbol + (s.kinerja ? ` (${s.kinerja.return_pct >= 0 ? '+' : ''}${s.kinerja.return_pct}% 90h)` : '')).join(', '),\n  pesan: pesan.slice(0, 4000),\n} }];"
+      },
+      "id": "a7132783-9a58-4b29-b1bf-2b3561626c64",
+      "name": "Susun pesan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1_6e21zXqNjRDP9jcQeNS9jRl76780hNTxycJxDQBoLM/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "run_log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.timestamp }}",
+            "mode": "={{ $json.mode }}",
+            "as_of_date": "={{ $json.as_of_date }}",
+            "ri_dalam_jendela": "={{ $json.ri_dalam_jendela }}",
+            "akuisisi_terdeteksi": "={{ $json.akuisisi_terdeteksi }}",
+            "kandidat": "={{ $json.kandidat }}",
+            "lolos": "={{ $json.lolos }}",
+            "simbol_lolos": "={{ $json.simbol_lolos }}",
+            "pesan": "={{ $json.pesan }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mode",
+              "displayName": "mode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "as_of_date",
+              "displayName": "as_of_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ri_dalam_jendela",
+              "displayName": "ri_dalam_jendela",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "akuisisi_terdeteksi",
+              "displayName": "akuisisi_terdeteksi",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "kandidat",
+              "displayName": "kandidat",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lolos",
+              "displayName": "lolos",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "simbol_lolos",
+              "displayName": "simbol_lolos",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "pesan",
+              "displayName": "pesan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "42f8cda8-80a9-4d7d-a54b-9ad99f497a75",
+      "name": "Catat run_log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1040,
+        528
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "EliFNZ84E3P4Dwpa",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -6592,
+        864
+      ],
+      "id": "1b4fb794-41f2-4116-a987-6e4e27f6a0cc",
+      "name": "Dipanggil Backtest"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Jadwal 07.30 WIB (Sen-Jum)": {
+      "main": [
+        [
+          {
+            "node": "Konfigurasi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Konfigurasi": {
+      "main": [
+        [
+          {
+            "node": "Kalender Right Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalender Right Issue": {
+      "main": [
+        [
+          {
+            "node": "Screener Owner Whitelist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Screener Owner Whitelist": {
+      "main": [
+        [
+          {
+            "node": "Filings Pasar (Pengambilalihan)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filings Pasar (Pengambilalihan)": {
+      "main": [
+        [
+          {
+            "node": "Gabung kandidat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gabung kandidat": {
+      "main": [
+        [
+          {
+            "node": "Ada kandidat?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada kandidat?": {
+      "main": [
+        [
+          {
+            "node": "Harga 90 Hari",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Susun pesan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Harga 90 Hari": {
+      "main": [
+        [
+          {
+            "node": "Gerbang Pasar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerbang Pasar": {
+      "main": [
+        [
+          {
+            "node": "Lolos gerbang?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lolos gerbang?": {
+      "main": [
+        [
+          {
+            "node": "Siapkan query fundamental",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Susun pesan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Siapkan query fundamental": {
+      "main": [
+        [
+          {
+            "node": "Screener Pendapatan Tumbuh",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Screener Pendapatan Tumbuh": {
+      "main": [
+        [
+          {
+            "node": "Screener Turnaround Laba",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Screener Turnaround Laba": {
+      "main": [
+        [
+          {
+            "node": "Screener Ekuitas Negatif",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Screener Ekuitas Negatif": {
+      "main": [
+        [
+          {
+            "node": "Kembalikan kandidat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kembalikan kandidat": {
+      "main": [
+        [
+          {
+            "node": "Riwayat Corporate Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Riwayat Corporate Action": {
+      "main": [
+        [
+          {
+            "node": "Hitung RI ke-berapa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hitung RI ke-berapa": {
+      "main": [
+        [
+          {
+            "node": "Filings 12 Bulan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filings 12 Bulan": {
+      "main": [
+        [
+          {
+            "node": "Analisis Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analisis Owner": {
+      "main": [
+        [
+          {
+            "node": "Berita 120 Hari",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Berita 120 Hari": {
+      "main": [
+        [
+          {
+            "node": "Siapkan Berita",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Siapkan Berita": {
+      "main": [
+        [
+          {
+            "node": "Klasifikasi Narasi (AI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Haiku": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Klasifikasi Narasi (AI)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Klasifikasi Narasi (AI)": {
+      "main": [
+        [
+          {
+            "node": "Skor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skor": {
+      "main": [
+        [
+          {
+            "node": "Ada yang lolos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada yang lolos?": {
+      "main": [
+        [
+          {
+            "node": "Mode backtest?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Susun pesan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mode backtest?": {
+      "main": [
+        [
+          {
+            "node": "Kinerja 90 Hari Setelah Sinyal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tulis Tesis (AI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kinerja 90 Hari Setelah Sinyal": {
+      "main": [
+        [
+          {
+            "node": "Gabung Kinerja",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gabung Kinerja": {
+      "main": [
+        [
+          {
+            "node": "Tulis Tesis (AI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Sonnet": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Tulis Tesis (AI)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tulis Tesis (AI)": {
+      "main": [
+        [
+          {
+            "node": "Susun pesan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Susun pesan": {
+      "main": [
+        [
+          {
+            "node": "Catat run_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dipanggil Backtest": {
+      "main": [
+        [
+          {
+            "node": "Konfigurasi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "ad6ab70f-dd39-4e4a-9181-cdb9ba982372",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f77324581907553341dfe7ef29cbc201a1fdca115d3456533a61ca342dd613c8"
+  },
+  "nodeGroups": [],
+  "id": "Z3u5VPVwiwln10yl",
+  "tags": []
+}
